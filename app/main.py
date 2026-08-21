@@ -14,7 +14,6 @@ from tools.registry import Tool, ToolRegistry
 
 load_dotenv()
 
-
 PROVIDER_KEYS = (
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
@@ -74,11 +73,10 @@ def build_app():
     add("browser_screenshot", "Take a full-page screenshot and save it to the coding workspace.", safe_screenshot,
         {"path": {"type": "string"}}, ["path"])
 
-    # Use the strict Anthropic implementation directly instead of monkey-patching
-    # a MultiProvider instance at runtime.
     provider = AnthropicSafeProvider()
     runtime = AIRuntime(provider)
     orchestrator = Orchestrator(runtime, ToolAdapter(registry))
+    orchestrator.browser = browser
     return orchestrator, TaskMemory(), provider
 
 
@@ -152,9 +150,7 @@ def main():
             except Exception as exc:
                 print(f"ERROR > {exc}")
     finally:
-        browser = getattr(orchestrator, "browser", None)
-        if browser:
-            browser.stop()
+        orchestrator.browser.stop()
 
 
 if __name__ == "__main__":
