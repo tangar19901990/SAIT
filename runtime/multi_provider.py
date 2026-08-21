@@ -81,10 +81,41 @@ class MultiProvider:
                 if content_items: output_items.append({"type": "message", "role": "assistant", "content": content_items})
         return {"text": "\n".join(texts), "function_calls": calls, "output_items": output_items, "response_id": response.id, "model": model, "provider": "openai"}
 
+    def _discover_gemini_model(self, api_key: str) -> str:
+        """Discover a model available to this API key that supports generateContent."""
+        configured = os.getenv("GEMINI_MODEL", "").strip()
+        response = httpx.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": api_key, "pageSize": 100},
+            timeout=30,
+        )
+        response.raise_for_status()
+        models = response.json().get("models", [])
+        candidates = []
+        for item in models:
+            methods = item.get("supportedGenerationMethods") or []
+            name = str(item.get("name", ""))
+            if "generateContent" not in methods or not name:
+                continue
+            short = name.split("/", 1)[-1]
+            if configured and short == configured:
+                return short
+            lower = short.lower()
+            score = 0
+            if "flash" in lower: score += 100
+            if "pro" in lower: score += 50
+            if "latest" in lower: score += 10
+            if "exp" in lower or "preview" in lower: score -= 5
+            candidates.append((score, short))
+        if not candidates:
+            raise RuntimeError("Gemini API key has no model available with generateContent.")
+        candidates.sort(reverse=True)
+        return candidates[0][1]
+
     def _gemini(self, messages, tools):
-        """Use Google's native Gemini generateContent API, not the OpenAI compatibility endpoint."""
+        """Use Google's native Gemini generateContent API with automatic model discovery."""
         api_key = os.environ["GEMINI_API_KEY"]
-        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        model = self._discover_gemini_model(api_key)
         system_parts, contents = [], []
         for msg in messages:
             role = msg.get("role")
