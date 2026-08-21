@@ -12,10 +12,11 @@ class ExecutionState:
 class Orchestrator:
     """Coordinates an AI provider with registered tools."""
 
-    def __init__(self, runtime, tool_adapter, max_steps: int = 30):
+    def __init__(self, runtime, tool_adapter, max_steps: int = 30, max_repeated_calls: int = 3):
         self.runtime = runtime
         self.tools = tool_adapter
         self.max_steps = max_steps
+        self.max_repeated_calls = max_repeated_calls
 
     def _system_prompt(self, goal: str) -> str:
         research_words = (
@@ -35,6 +36,7 @@ class Orchestrator:
             "When browser tools are available, use them for web tasks instead of saying that you cannot access the internet. "
             "After each browser action, inspect the resulting page before deciding the next action. "
             "Keep track of the exact requested subject, search query, and current page so you do not switch to an unrelated task. "
+            "If a tool fails, inspect the error and adapt instead of repeating the exact same failed call. "
         )
 
         if is_research:
@@ -51,19 +53,26 @@ class Orchestrator:
 
         return prompt
 
+    @staticmethod
+    def _short_result(result: Any, limit: int = 20000) -> str:
+        text = str(result)
+        if len(text) <= limit:
+            return text
+        return text[:limit] + "\n[tool output truncated by SAIT]"
+
     def run(self, goal: str) -> ExecutionState:
         state = ExecutionState(goal=goal)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._system_prompt(goal)},
             {"role": "user", "content": goal},
         ]
+        tool_schemas = self.tools.schemas()
+        recent_calls: list[str] = []
 
         for step in range(self.max_steps):
-            # Always send the complete local conversation history.
-            # This avoids stale/cross-provider Responses API IDs when switching providers.
             response = self.runtime.run(
                 messages,
-                tools=self.tools.schemas(),
+                tools=tool_schemas,
                 previous_response_id=None,
             )
             calls = response.get("function_calls", [])
@@ -79,26 +88,41 @@ class Orchestrator:
                 messages.extend(output_items)
 
             for call in calls:
-                name = call["name"]
-                arguments = call.get("arguments", {})
+                name = call.get("name", "")
+                arguments = call.get("arguments", {}) or {}
+                call_key = f"{name}:{arguments}"
+                recent_calls.append(call_key)
+                recent_calls = recent_calls[-self.max_repeated_calls:]
+
+                if len(recent_calls) == self.max_repeated_calls and len(set(recent_calls)) == 1:
+                    state.history.append({
+                        "action": "guard",
+                        "output": f"Stopped repeated tool call: {name}",
+                    })
+                    state.status = "stopped_repeated_tool_call"
+                    return state
+
                 try:
                     result = self.tools.call(name, **arguments)
                 except Exception as exc:
-                    result = {"error": str(exc)}
+                    result = {"error": f"{type(exc).__name__}: {exc}"}
 
+                result_text = self._short_result(result)
                 state.history.append({
                     "action": name,
                     "arguments": arguments,
-                    "result": result,
+                    "result": result_text,
                 })
-                # Keep the tool name so Gemini and Anthropic can construct
-                # provider-specific tool-result messages correctly.
                 messages.append({
                     "type": "function_call_output",
                     "name": name,
-                    "call_id": call["call_id"],
-                    "output": str(result),
+                    "call_id": call.get("call_id", f"call-{step}"),
+                    "output": result_text,
                 })
 
         state.status = f"max_steps:{self.max_steps}"
+        state.history.append({
+            "action": "guard",
+            "output": f"Stopped after {self.max_steps} steps without completion.",
+        })
         return state
