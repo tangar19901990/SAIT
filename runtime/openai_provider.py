@@ -7,8 +7,8 @@ class OpenAIProvider:
     """OpenAI-compatible Responses API adapter with function calling.
 
     Supports OpenAI directly and OpenRouter through OPENAI_BASE_URL.
-    OpenRouter does not support Responses API conversation chaining via
-    previous_response_id, so that parameter is intentionally omitted there.
+    Tool-call output items are returned so the orchestrator can preserve
+    the full conversation when a provider does not support response chaining.
     """
 
     def __init__(self, model: str | None = None):
@@ -34,29 +34,53 @@ class OpenAIProvider:
             "tools": tools or [],
         }
 
-        # OpenAI supports conversation chaining with previous_response_id.
-        # OpenRouter currently rejects this field in its Responses API.
+        # Do not use previous_response_id for OpenRouter. The orchestrator
+        # supplies the accumulated conversation instead.
         if previous_response_id and not self.is_openrouter:
             kwargs["previous_response_id"] = previous_response_id
 
         response = self.client.responses.create(**kwargs)
         calls = []
         text_parts = []
+        output_items = []
+
         for item in response.output:
             item_type = getattr(item, "type", None)
+
             if item_type == "function_call":
+                arguments = json.loads(item.arguments)
                 calls.append({
                     "name": item.name,
                     "call_id": item.call_id,
-                    "arguments": json.loads(item.arguments),
+                    "arguments": arguments,
                 })
+                output_items.append({
+                    "type": "function_call",
+                    "name": item.name,
+                    "call_id": item.call_id,
+                    "arguments": item.arguments,
+                })
+
             elif item_type == "message":
+                content_items = []
                 for content in getattr(item, "content", []) or []:
                     text = getattr(content, "text", None)
                     if text:
                         text_parts.append(text)
+                    content_type = getattr(content, "type", "output_text")
+                    if text:
+                        content_items.append({"type": content_type, "text": text})
+
+                if content_items:
+                    output_items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": content_items,
+                    })
+
         return {
             "text": "\n".join(text_parts),
             "function_calls": calls,
+            "output_items": output_items,
             "response_id": response.id,
         }
