@@ -8,6 +8,7 @@ from coding import CodingEngine
 from memory import TaskMemory
 from orchestrator import Orchestrator
 from runtime import AIRuntime
+from runtime.anthropic_provider_patch import AnthropicSafeProvider
 from runtime.multi_provider import MultiProvider
 from runtime.tool_adapter import ToolAdapter
 from tools.registry import Tool, ToolRegistry
@@ -62,7 +63,9 @@ def build_app():
         lambda path: browser.screenshot(str(workspace / path)),
         {"path": {"type": "string"}}, ["path"])
 
+    # Use the strict Anthropic adapter while keeping the same provider pool.
     provider = MultiProvider()
+    provider._anthropic = AnthropicSafeProvider._anthropic.__get__(provider, MultiProvider)
     runtime = AIRuntime(provider)
     orchestrator = Orchestrator(runtime, ToolAdapter(registry))
     return orchestrator, TaskMemory(), provider
