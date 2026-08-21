@@ -8,7 +8,7 @@ from coding import CodingEngine
 from memory import TaskMemory
 from orchestrator import Orchestrator
 from runtime import AIRuntime
-from runtime.openai_provider import OpenAIProvider
+from runtime.multi_provider import MultiProvider
 from runtime.tool_adapter import ToolAdapter
 from tools.registry import Tool, ToolRegistry
 
@@ -16,10 +16,10 @@ load_dotenv()
 
 
 def build_app():
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY is missing. Copy .env.example to .env and add your API key.")
-    if not os.getenv("SAIT_MODEL"):
-        raise RuntimeError("SAIT_MODEL is missing. Set it to an API model available in your account.")
+    if not any(os.getenv(k) for k in (
+        "OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"
+    )):
+        raise RuntimeError("No AI API key is configured. Add at least one key to .env")
 
     workspace = Path(os.getenv("SAIT_WORKSPACE", "workspace")).resolve()
     coding = CodingEngine(str(workspace))
@@ -62,17 +62,43 @@ def build_app():
         lambda path: browser.screenshot(str(workspace / path)),
         {"path": {"type": "string"}}, ["path"])
 
-    runtime = AIRuntime(OpenAIProvider())
+    provider = MultiProvider()
+    runtime = AIRuntime(provider)
     orchestrator = Orchestrator(runtime, ToolAdapter(registry))
-    return orchestrator, TaskMemory()
+    return orchestrator, TaskMemory(), provider
+
+
+def print_help(provider):
+    print("\nКоманди провайдера:")
+    print("  /auto         автоматичний режим")
+    print("  /gemini       тільки Gemini")
+    print("  /claude       тільки Claude")
+    print("  /gpt          тільки OpenAI")
+    print("  /groq         тільки Groq")
+    print("  /openrouter   тільки OpenRouter")
+    print("  /provider     показати поточний режим")
+    print("  /providers    показати доступні ключі")
+    print("  /help         показати допомогу")
+    print(f"\nПоточний режим: {provider.get_provider()}")
 
 
 def main():
-    orchestrator, memory = build_app()
-    print("TOP SECRET AI v2.0 - local runtime")
+    orchestrator, memory, provider = build_app()
+    print("TOP SECRET AI v3.0 - local runtime")
     print("Browser: Chromium connected")
     print("Coding workspace: ready")
-    print("Type 'exit' to quit.")
+    print("AI providers: ready")
+    print("Type /help for provider commands, or 'exit' to quit.")
+
+    command_map = {
+        "/auto": "auto",
+        "/gemini": "gemini",
+        "/claude": "anthropic",
+        "/gpt": "openai",
+        "/groq": "groq",
+        "/openrouter": "openrouter",
+    }
+
     while True:
         try:
             goal = input("\nYOU > ").strip()
@@ -83,11 +109,31 @@ def main():
             break
         if not goal:
             continue
+
+        command = goal.lower()
+        if command in command_map:
+            selected = command_map[command]
+            provider.set_provider(selected)
+            print(f"AI MODE > {selected}")
+            continue
+        if command == "/provider":
+            print(f"AI MODE > {provider.get_provider()}")
+            print(f"LAST AI > {provider.last_provider or 'none'}")
+            continue
+        if command == "/providers":
+            available = provider.available_providers()
+            print("AVAILABLE > " + (", ".join(available) if available else "none"))
+            continue
+        if command == "/help":
+            print_help(provider)
+            continue
+
         try:
             state = orchestrator.run(goal)
             summary = state.history[-1].get("output", state.status) if state.history else state.status
             memory.remember(goal, state.status, str(summary))
-            print(f"AI  > {summary}")
+            used = provider.last_provider or provider.get_provider()
+            print(f"AI [{used}] > {summary}")
         except Exception as exc:
             print(f"ERROR > {exc}")
 
