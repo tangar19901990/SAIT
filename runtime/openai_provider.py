@@ -1,23 +1,39 @@
-import os
 from typing import Any
-
-from openai import OpenAI
+import json
+import os
 
 
 class OpenAIProvider:
-    """OpenAI Responses API adapter for SAIT."""
+    """OpenAI Responses API adapter with function calling."""
 
     def __init__(self, model: str | None = None):
-        self.model = model or os.getenv("SAIT_MODEL", "gpt-5.6")
+        from openai import OpenAI
         self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self.model = model or os.getenv("SAIT_MODEL", "gpt-5.6")
 
-    def complete(self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         response = self.client.responses.create(
             model=self.model,
             input=messages,
+            tools=tools or [],
         )
+        calls = []
+        text_parts = []
+        for item in response.output:
+            item_type = getattr(item, "type", None)
+            if item_type == "function_call":
+                calls.append({
+                    "name": item.name,
+                    "call_id": item.call_id,
+                    "arguments": json.loads(item.arguments),
+                })
+            elif item_type == "message":
+                for content in getattr(item, "content", []) or []:
+                    text = getattr(content, "text", None)
+                    if text:
+                        text_parts.append(text)
         return {
-            "action": "finish",
-            "output": response.output_text,
-            "raw": response,
+            "text": "\n".join(text_parts),
+            "function_calls": calls,
+            "response_id": response.id,
         }
