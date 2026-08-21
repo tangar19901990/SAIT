@@ -26,54 +26,41 @@ def build_app():
     browser = BrowserController(BrowserConfig(headless=False)).start()
     registry = ToolRegistry()
 
-    registry.register(Tool(
-        name="read_file",
-        description="Read a UTF-8 text file inside the coding workspace.",
-        handler=coding.read_file,
-        parameters={"type": "object", "properties": {"relative_path": {"type": "string"}}, "required": ["relative_path"], "additionalProperties": False},
-    ))
-    registry.register(Tool(
-        name="write_file",
-        description="Create or replace a UTF-8 text file inside the coding workspace.",
-        handler=coding.write_file,
-        parameters={"type": "object", "properties": {"relative_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["relative_path", "content"], "additionalProperties": False},
-    ))
-    registry.register(Tool(
-        name="list_files",
-        description="List files inside the coding workspace.",
-        handler=coding.list_files,
-        parameters={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
-    ))
-    registry.register(Tool(
-        name="browser_open",
-        description="Open a URL in the local Chromium browser and return its title and final URL.",
-        handler=browser.open,
-        parameters={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"], "additionalProperties": False},
-    ))
-    registry.register(Tool(
-        name="browser_text",
-        description="Read visible text from the current browser page using a CSS selector.",
-        handler=browser.text,
-        parameters={"type": "object", "properties": {"selector": {"type": "string"}}, "required": ["selector"], "additionalProperties": False},
-    ))
-    registry.register(Tool(
-        name="browser_click",
-        description="Click an element on the current browser page using a CSS selector.",
-        handler=browser.click,
-        parameters={"type": "object", "properties": {"selector": {"type": "string"}}, "required": ["selector"], "additionalProperties": False},
-    ))
-    registry.register(Tool(
-        name="browser_fill",
-        description="Fill an input or textarea on the current browser page using a CSS selector.",
-        handler=browser.fill,
-        parameters={"type": "object", "properties": {"selector": {"type": "string"}, "value": {"type": "string"}}, "required": ["selector", "value"], "additionalProperties": False},
-    ))
-    registry.register(Tool(
-        name="browser_screenshot",
-        description="Take a full-page screenshot of the current browser page and save it to the workspace.",
-        handler=lambda path: browser.screenshot(str(workspace / path)),
-        parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False},
-    ))
+    def add(name, description, handler, properties, required):
+        registry.register(Tool(
+            name=name,
+            description=description,
+            handler=handler,
+            parameters={
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": False,
+            },
+        ))
+
+    add("read_file", "Read a UTF-8 text file inside the coding workspace.", coding.read_file,
+        {"relative_path": {"type": "string"}}, ["relative_path"])
+    add("write_file", "Create or replace a UTF-8 text file inside the coding workspace.", coding.write_file,
+        {"relative_path": {"type": "string"}, "content": {"type": "string"}}, ["relative_path", "content"])
+    add("list_files", "List files inside the coding workspace.", coding.list_files, {}, [])
+
+    add("browser_open", "Open a URL in local Chromium and return its title and final URL.", browser.open,
+        {"url": {"type": "string"}}, ["url"])
+    add("browser_current", "Return the current browser URL and page title.", browser.current, {}, [])
+    add("browser_text", "Read visible text from the current browser page using a CSS selector.", browser.text,
+        {"selector": {"type": "string"}}, ["selector"])
+    add("browser_html", "Read the outer HTML of an element on the current browser page.", browser.html,
+        {"selector": {"type": "string"}}, ["selector"])
+    add("browser_click", "Click an element on the current browser page using a CSS selector.", browser.click,
+        {"selector": {"type": "string"}}, ["selector"])
+    add("browser_fill", "Fill an input or textarea using a CSS selector.", browser.fill,
+        {"selector": {"type": "string"}, "value": {"type": "string"}}, ["selector", "value"])
+    add("browser_press", "Press a keyboard key on an element using a CSS selector.", browser.press,
+        {"selector": {"type": "string"}, "key": {"type": "string"}}, ["selector", "key"])
+    add("browser_screenshot", "Take a full-page screenshot and save it to the coding workspace.",
+        lambda path: browser.screenshot(str(workspace / path)),
+        {"path": {"type": "string"}}, ["path"])
 
     runtime = AIRuntime(OpenAIProvider())
     orchestrator = Orchestrator(runtime, ToolAdapter(registry))
@@ -82,8 +69,9 @@ def build_app():
 
 def main():
     orchestrator, memory = build_app()
-    print("TOP SECRET AI - local runtime")
+    print("TOP SECRET AI v2.0 - local runtime")
     print("Browser: Chromium connected")
+    print("Coding workspace: ready")
     print("Type 'exit' to quit.")
     while True:
         try:
@@ -95,10 +83,13 @@ def main():
             break
         if not goal:
             continue
-        state = orchestrator.run(goal)
-        summary = state.history[-1].get("output", state.status) if state.history else state.status
-        memory.remember(goal, state.status, str(summary))
-        print(f"AI  > {summary}")
+        try:
+            state = orchestrator.run(goal)
+            summary = state.history[-1].get("output", state.status) if state.history else state.status
+            memory.remember(goal, state.status, str(summary))
+            print(f"AI  > {summary}")
+        except Exception as exc:
+            print(f"ERROR > {exc}")
 
 
 if __name__ == "__main__":
