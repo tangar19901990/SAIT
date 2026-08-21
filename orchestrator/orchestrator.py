@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass
@@ -10,7 +10,7 @@ class ExecutionState:
 
 
 class Orchestrator:
-    """Coordinates planning and tool execution without owning any AI provider."""
+    """Coordinates an AI provider with registered tools."""
 
     def __init__(self, runtime, tool_adapter, max_steps: int = 30):
         self.runtime = runtime
@@ -19,29 +19,35 @@ class Orchestrator:
 
     def run(self, goal: str) -> ExecutionState:
         state = ExecutionState(goal=goal)
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": "You are TOP SECRET AI. Plan tasks, use tools carefully, verify results, and stop when the goal is complete."},
             {"role": "user", "content": goal},
         ]
 
         for _ in range(self.max_steps):
             response = self.runtime.run(messages, tools=self.tools.schemas())
-            action = response.get("action", "finish")
-            arguments = response.get("arguments", {})
+            calls = response.get("function_calls", [])
 
-            if action == "finish":
-                state.history.append({"action": "finish", "output": response.get("output")})
+            if not calls:
+                output = response.get("text") or "Задача завершена."
+                state.history.append({"action": "finish", "output": output})
                 state.status = "completed"
                 return state
 
-            try:
-                result = self.tools.call(action, **arguments)
-            except Exception as exc:
-                result = {"error": str(exc)}
+            for call in calls:
+                name = call["name"]
+                arguments = call.get("arguments", {})
+                try:
+                    result = self.tools.call(name, **arguments)
+                except Exception as exc:
+                    result = {"error": str(exc)}
 
-            state.history.append({"action": action, "arguments": arguments, "result": result})
-            messages.append({"role": "assistant", "content": str(response)})
-            messages.append({"role": "tool", "content": str(result)})
+                state.history.append({"action": name, "arguments": arguments, "result": result})
+                messages.append({
+                    "type": "function_call_output",
+                    "call_id": call["call_id"],
+                    "output": str(result),
+                })
 
         state.status = "max_steps"
         return state
