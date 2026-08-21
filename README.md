@@ -1,29 +1,36 @@
 # TOP SECRET AI Agent
 
-Universal local AI agent for Windows 10.
+Universal local AI agent for Windows 10/11.
 
-## Vision
+## Current MVP
 
-A personal agent that can reason, plan, use a browser, work with files, write and test code, use GitHub, create modern interfaces, and later run autonomous scheduled tasks.
+SAIT can:
 
-## Architecture
+- switch between Gemini, Claude, OpenAI, Groq and OpenRouter;
+- run in automatic provider-fallback mode;
+- control a visible Chromium browser with Playwright;
+- open pages, read text/HTML, click, fill forms, press keys and take screenshots;
+- read, write and list files inside its coding workspace;
+- keep a local JSONL task history;
+- verify web-research results instead of treating search snippets as facts;
+- stop repeated tool loops and bound oversized tool output.
 
-- `agent/` orchestration and planning
-- `tools/` safe tool interfaces
-- `browser/` browser automation adapter
-- `coding/` coding workspace and execution
-- `memory/` persistent project memory
-- `security/` permissions and approval gates
-- `interface/` local control panel
-- `tests/` automated tests
-- `projects/` isolated workspaces for generated projects
+## Project structure
 
-## Development strategy
+- `app/` application entry point and CLI
+- `runtime/` provider adapters and runtime facade
+- `orchestrator/` planning, tool execution and loop guards
+- `browser/` Playwright browser controller
+- `coding/` workspace file operations
+- `memory/` local task history
+- `tools/` tool registry and adapter
+- `agent/`, `core/`, `design/` experimental modules for later expansion
 
-Phase 1 is a local Windows-first MVP. The agent must be able to receive a natural-language task, make a plan, use tools, inspect results, recover from errors, and return a clear report.
+## Windows launch
 
-Dangerous operations require explicit approval. API keys and secrets must never be committed to GitHub.
+1. Copy `.env.example` to `.env`.
+2. Add at least one provider API key.
+3. Run `run_sait.bat`.
+4. At `YOU >`, use `/help` for provider commands.
 
-## Status
-
-Scaffold initialized. Next milestone: local runtime + provider adapter + tool registry + browser control + coding workspace.
+API keys belong only in the local `.env`. Never commit real secrets to GitHub.
