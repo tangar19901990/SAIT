@@ -1,37 +1,51 @@
 import os
 from pathlib import Path
 
-from coding import CodingEngine, AutoCoder
-from design import DesignEngine, DesignCodeBridge
+from dotenv import load_dotenv
+
+from coding import CodingEngine
 from memory import TaskMemory
 from orchestrator import Orchestrator
 from runtime import AIRuntime
-from tools.registry import ToolRegistry
+from runtime.openai_provider import OpenAIProvider
+from runtime.tool_adapter import ToolAdapter
+from tools.registry import Tool, ToolRegistry
 
-
-class DemoProvider:
-    """Placeholder provider for local smoke tests.
-
-    Replace with a real provider adapter through SAIT_PROVIDER before production use.
-    """
-
-    def complete(self, messages, tools=None):
-        return {"action": "finish", "output": "Runtime is connected. Configure a real AI provider."}
+load_dotenv()
 
 
 def build_app():
+    if not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY is missing. Copy .env.example to .env and add your API key.")
+    if not os.getenv("SAIT_MODEL"):
+        raise RuntimeError("SAIT_MODEL is missing. Set it to an API model available in your account.")
+
     workspace = Path(os.getenv("SAIT_WORKSPACE", "workspace")).resolve()
     coding = CodingEngine(str(workspace))
     registry = ToolRegistry()
-    registry.register("read_file", "Read a project file", coding.read_file)
-    registry.register("write_file", "Write a project file", coding.write_file)
-    registry.register("list_files", "List project files", lambda: coding.list_files())
-    registry.register("run_command", "Run an explicit command in the workspace", coding.run)
 
-    runtime = AIRuntime(DemoProvider())
-    orchestrator = Orchestrator(runtime, __import__("runtime.tool_adapter", fromlist=["ToolAdapter"]).ToolAdapter(registry))
-    memory = TaskMemory()
-    return orchestrator, memory
+    registry.register(Tool(
+        name="read_file",
+        description="Read a UTF-8 text file inside the coding workspace.",
+        handler=coding.read_file,
+        parameters={"type": "object", "properties": {"relative_path": {"type": "string"}}, "required": ["relative_path"], "additionalProperties": False},
+    ))
+    registry.register(Tool(
+        name="write_file",
+        description="Create or replace a UTF-8 text file inside the coding workspace.",
+        handler=coding.write_file,
+        parameters={"type": "object", "properties": {"relative_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["relative_path", "content"], "additionalProperties": False},
+    ))
+    registry.register(Tool(
+        name="list_files",
+        description="List files inside the coding workspace.",
+        handler=coding.list_files,
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    ))
+
+    runtime = AIRuntime(OpenAIProvider())
+    orchestrator = Orchestrator(runtime, ToolAdapter(registry))
+    return orchestrator, TaskMemory()
 
 
 def main():
