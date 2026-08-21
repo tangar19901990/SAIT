@@ -81,11 +81,59 @@ class MultiProvider:
                 if content_items: output_items.append({"type": "message", "role": "assistant", "content": content_items})
         return {"text": "\n".join(texts), "function_calls": calls, "output_items": output_items, "response_id": response.id, "model": model, "provider": "openai"}
 
+    def _gemini(self, messages, tools):
+        """Use Google's native Gemini generateContent API, not the OpenAI compatibility endpoint."""
+        api_key = os.environ["GEMINI_API_KEY"]
+        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        system_parts, contents = [], []
+        for msg in messages:
+            role = msg.get("role")
+            text = str(msg.get("content", ""))
+            if role == "system":
+                system_parts.append(text)
+            elif role == "user":
+                contents.append({"role": "user", "parts": [{"text": text}]})
+            elif role == "assistant":
+                contents.append({"role": "model", "parts": [{"text": text}]})
+            elif msg.get("type") == "function_call_output":
+                contents.append({"role": "user", "parts": [{"functionResponse": {"name": msg.get("name", "tool"), "response": {"result": msg.get("output", "")}}}]})
+
+        body: dict[str, Any] = {"contents": contents, "generationConfig": {"temperature": 0.2}}
+        if system_parts:
+            body["systemInstruction"] = {"parts": [{"text": "\n".join(system_parts)}]}
+        if tools:
+            declarations = []
+            for t in tools:
+                schema = dict(t.get("parameters") or {"type": "object", "properties": {}})
+                schema.pop("additionalProperties", None)
+                declarations.append({"name": t["name"], "description": t.get("description", ""), "parameters": schema})
+            body["tools"] = [{"functionDeclarations": declarations}]
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        response = httpx.post(url, params={"key": api_key}, json=body, timeout=120)
+        response.raise_for_status()
+        data = response.json()
+        candidates = data.get("candidates") or []
+        parts = ((candidates[0].get("content") or {}).get("parts") if candidates else []) or []
+        texts, calls, output_items = [], [], []
+        for part in parts:
+            if part.get("text"):
+                texts.append(part["text"])
+            fc = part.get("functionCall")
+            if fc:
+                call_id = f"gemini-{len(calls)+1}"
+                args = fc.get("args") or {}
+                calls.append({"name": fc.get("name", ""), "call_id": call_id, "arguments": args})
+                output_items.append({"type": "function_call", "name": fc.get("name", ""), "call_id": call_id, "arguments": json.dumps(args)})
+        text = "\n".join(texts)
+        if text:
+            output_items.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]})
+        return {"text": text, "function_calls": calls, "output_items": output_items, "response_id": None, "model": model, "provider": "gemini"}
+
     def _compatible(self, provider, messages, tools):
         configs = {
-            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", os.getenv("GEMINI_API_KEY"), os.getenv("GEMINI_MODEL", "gemini-2.5-flash")),
             "groq": ("https://api.groq.com/openai/v1/chat/completions", os.getenv("GROQ_API_KEY"), os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")),
-            "openrouter": ("https://openrouter.ai/api/v1/chat/completions", os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY"), os.getenv("OPENROUTER_MODEL", "openrouter/free")),
+            "openrouter": ("https://openrouter.ai/api/v1/chat/completions", os.getenv("OPENROUTER_API_KEY"), os.getenv("OPENROUTER_MODEL", "openrouter/free")),
         }
         url, key, model = configs[provider]
         response = httpx.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, json={"model": model, "messages": self._chat_messages(messages), "tools": self._chat_tools(tools), "temperature": 0.2}, timeout=120)
@@ -117,6 +165,7 @@ class MultiProvider:
             if not self._configured(provider): continue
             try:
                 if provider == "openai": result = self._openai(messages, tools, previous_response_id)
+                elif provider == "gemini": result = self._gemini(messages, tools)
                 elif provider == "anthropic": result = self._anthropic(messages, tools)
                 else: result = self._compatible(provider, messages, tools)
                 self.last_provider = provider; self.is_openrouter = provider == "openrouter"; return result
