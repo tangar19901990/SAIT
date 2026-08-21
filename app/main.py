@@ -9,17 +9,23 @@ from memory import TaskMemory
 from orchestrator import Orchestrator
 from runtime import AIRuntime
 from runtime.anthropic_provider_patch import AnthropicSafeProvider
-from runtime.multi_provider import MultiProvider
 from runtime.tool_adapter import ToolAdapter
 from tools.registry import Tool, ToolRegistry
 
 load_dotenv()
 
 
+PROVIDER_KEYS = (
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GROQ_API_KEY",
+    "OPENROUTER_API_KEY",
+)
+
+
 def build_app():
-    if not any(os.getenv(k) for k in (
-        "OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"
-    )):
+    if not any(os.getenv(k) for k in PROVIDER_KEYS):
         raise RuntimeError("No AI API key is configured. Add at least one key to .env")
 
     workspace = Path(os.getenv("SAIT_WORKSPACE", "workspace")).resolve()
@@ -40,6 +46,12 @@ def build_app():
             },
         ))
 
+    def safe_screenshot(relative_path: str):
+        target = (workspace / relative_path).resolve()
+        if workspace != target and workspace not in target.parents:
+            raise ValueError("Screenshot path escapes the coding workspace")
+        return browser.screenshot(str(target))
+
     add("read_file", "Read a UTF-8 text file inside the coding workspace.", coding.read_file,
         {"relative_path": {"type": "string"}}, ["relative_path"])
     add("write_file", "Create or replace a UTF-8 text file inside the coding workspace.", coding.write_file,
@@ -59,13 +71,12 @@ def build_app():
         {"selector": {"type": "string"}, "value": {"type": "string"}}, ["selector", "value"])
     add("browser_press", "Press a keyboard key on an element using a CSS selector.", browser.press,
         {"selector": {"type": "string"}, "key": {"type": "string"}}, ["selector", "key"])
-    add("browser_screenshot", "Take a full-page screenshot and save it to the coding workspace.",
-        lambda path: browser.screenshot(str(workspace / path)),
+    add("browser_screenshot", "Take a full-page screenshot and save it to the coding workspace.", safe_screenshot,
         {"path": {"type": "string"}}, ["path"])
 
-    # Use the strict Anthropic adapter while keeping the same provider pool.
-    provider = MultiProvider()
-    provider._anthropic = AnthropicSafeProvider._anthropic.__get__(provider, MultiProvider)
+    # Use the strict Anthropic implementation directly instead of monkey-patching
+    # a MultiProvider instance at runtime.
+    provider = AnthropicSafeProvider()
     runtime = AIRuntime(provider)
     orchestrator = Orchestrator(runtime, ToolAdapter(registry))
     return orchestrator, TaskMemory(), provider
@@ -87,7 +98,7 @@ def print_help(provider):
 
 def main():
     orchestrator, memory, provider = build_app()
-    print("TOP SECRET AI v3.0 - local runtime")
+    print("TOP SECRET AI v3.1 - local runtime")
     print("Browser: Chromium connected")
     print("Coding workspace: ready")
     print("AI providers: ready")
@@ -102,43 +113,48 @@ def main():
         "/openrouter": "openrouter",
     }
 
-    while True:
-        try:
-            goal = input("\nYOU > ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if goal.lower() in {"exit", "quit"}:
-            break
-        if not goal:
-            continue
+    try:
+        while True:
+            try:
+                goal = input("\nYOU > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if goal.lower() in {"exit", "quit"}:
+                break
+            if not goal:
+                continue
 
-        command = goal.lower()
-        if command in command_map:
-            selected = command_map[command]
-            provider.set_provider(selected)
-            print(f"AI MODE > {selected}")
-            continue
-        if command == "/provider":
-            print(f"AI MODE > {provider.get_provider()}")
-            print(f"LAST AI > {provider.last_provider or 'none'}")
-            continue
-        if command == "/providers":
-            available = provider.available_providers()
-            print("AVAILABLE > " + (", ".join(available) if available else "none"))
-            continue
-        if command == "/help":
-            print_help(provider)
-            continue
+            command = goal.lower()
+            if command in command_map:
+                selected = command_map[command]
+                provider.set_provider(selected)
+                print(f"AI MODE > {selected}")
+                continue
+            if command == "/provider":
+                print(f"AI MODE > {provider.get_provider()}")
+                print(f"LAST AI > {provider.last_provider or 'none'}")
+                continue
+            if command == "/providers":
+                available = provider.available_providers()
+                print("AVAILABLE > " + (", ".join(available) if available else "none"))
+                continue
+            if command == "/help":
+                print_help(provider)
+                continue
 
-        try:
-            state = orchestrator.run(goal)
-            summary = state.history[-1].get("output", state.status) if state.history else state.status
-            memory.remember(goal, state.status, str(summary))
-            used = provider.last_provider or provider.get_provider()
-            print(f"AI [{used}] > {summary}")
-        except Exception as exc:
-            print(f"ERROR > {exc}")
+            try:
+                state = orchestrator.run(goal)
+                summary = state.history[-1].get("output", state.status) if state.history else state.status
+                memory.remember(goal, state.status, str(summary))
+                used = provider.last_provider or provider.get_provider()
+                print(f"AI [{used}] > {summary}")
+            except Exception as exc:
+                print(f"ERROR > {exc}")
+    finally:
+        browser = getattr(orchestrator, "browser", None)
+        if browser:
+            browser.stop()
 
 
 if __name__ == "__main__":
