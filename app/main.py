@@ -3,6 +3,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from browser import BrowserController, BrowserConfig
 from coding import CodingEngine
 from memory import TaskMemory
 from orchestrator import Orchestrator
@@ -22,6 +23,7 @@ def build_app():
 
     workspace = Path(os.getenv("SAIT_WORKSPACE", "workspace")).resolve()
     coding = CodingEngine(str(workspace))
+    browser = BrowserController(BrowserConfig(headless=False)).start()
     registry = ToolRegistry()
 
     registry.register(Tool(
@@ -42,6 +44,36 @@ def build_app():
         handler=coding.list_files,
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
     ))
+    registry.register(Tool(
+        name="browser_open",
+        description="Open a URL in the local Chromium browser and return its title and final URL.",
+        handler=browser.open,
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"], "additionalProperties": False},
+    ))
+    registry.register(Tool(
+        name="browser_text",
+        description="Read visible text from the current browser page using a CSS selector.",
+        handler=browser.text,
+        parameters={"type": "object", "properties": {"selector": {"type": "string"}}, "required": ["selector"], "additionalProperties": False},
+    ))
+    registry.register(Tool(
+        name="browser_click",
+        description="Click an element on the current browser page using a CSS selector.",
+        handler=browser.click,
+        parameters={"type": "object", "properties": {"selector": {"type": "string"}}, "required": ["selector"], "additionalProperties": False},
+    ))
+    registry.register(Tool(
+        name="browser_fill",
+        description="Fill an input or textarea on the current browser page using a CSS selector.",
+        handler=browser.fill,
+        parameters={"type": "object", "properties": {"selector": {"type": "string"}, "value": {"type": "string"}}, "required": ["selector", "value"], "additionalProperties": False},
+    ))
+    registry.register(Tool(
+        name="browser_screenshot",
+        description="Take a full-page screenshot of the current browser page and save it to the workspace.",
+        handler=lambda path="browser_screenshots/latest.png": browser.screenshot(str(workspace / path)),
+        parameters={"type": "object", "properties": {"path": {"type": "string"}}, "additionalProperties": False},
+    ))
 
     runtime = AIRuntime(OpenAIProvider())
     orchestrator = Orchestrator(runtime, ToolAdapter(registry))
@@ -51,6 +83,7 @@ def build_app():
 def main():
     orchestrator, memory = build_app()
     print("TOP SECRET AI - local runtime")
+    print("Browser: Chromium connected")
     print("Type 'exit' to quit.")
     while True:
         try:
