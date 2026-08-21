@@ -4,11 +4,22 @@ import os
 
 
 class OpenAIProvider:
-    """OpenAI Responses API adapter with function calling."""
+    """OpenAI-compatible Responses API adapter with function calling.
+
+    Supports OpenAI directly and OpenRouter through OPENAI_BASE_URL.
+    OpenRouter does not support Responses API conversation chaining via
+    previous_response_id, so that parameter is intentionally omitted there.
+    """
 
     def __init__(self, model: str | None = None):
         from openai import OpenAI
-        self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+        self.base_url = os.getenv("OPENAI_BASE_URL", "").rstrip("/")
+        self.is_openrouter = "openrouter.ai" in self.base_url.lower()
+        self.client = OpenAI(
+            api_key=os.environ["OPENAI_API_KEY"],
+            base_url=self.base_url or None,
+        )
         self.model = model or os.getenv("SAIT_MODEL", "gpt-5.6")
 
     def complete(
@@ -22,7 +33,10 @@ class OpenAIProvider:
             "input": messages,
             "tools": tools or [],
         }
-        if previous_response_id:
+
+        # OpenAI supports conversation chaining with previous_response_id.
+        # OpenRouter currently rejects this field in its Responses API.
+        if previous_response_id and not self.is_openrouter:
             kwargs["previous_response_id"] = previous_response_id
 
         response = self.client.responses.create(**kwargs)
