@@ -57,15 +57,15 @@ class Orchestrator:
             {"role": "system", "content": self._system_prompt(goal)},
             {"role": "user", "content": goal},
         ]
-        previous_response_id = None
 
-        for _ in range(self.max_steps):
+        for step in range(self.max_steps):
+            # Always send the complete local conversation history.
+            # This avoids stale/cross-provider Responses API IDs when switching providers.
             response = self.runtime.run(
                 messages,
                 tools=self.tools.schemas(),
-                previous_response_id=previous_response_id,
+                previous_response_id=None,
             )
-            previous_response_id = response.get("response_id")
             calls = response.get("function_calls", [])
 
             if not calls:
@@ -91,14 +91,14 @@ class Orchestrator:
                     "arguments": arguments,
                     "result": result,
                 })
+                # Keep the tool name so Gemini and Anthropic can construct
+                # provider-specific tool-result messages correctly.
                 messages.append({
                     "type": "function_call_output",
+                    "name": name,
                     "call_id": call["call_id"],
                     "output": str(result),
                 })
 
-            if self.runtime.provider.is_openrouter:
-                previous_response_id = None
-
-        state.status = "max_steps"
+        state.status = f"max_steps:{self.max_steps}"
         return state
