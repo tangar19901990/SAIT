@@ -42,7 +42,7 @@ def build_app():
         name="list_files",
         description="List files inside the coding workspace.",
         handler=coding.list_files,
-        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        parameters={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
     ))
     registry.register(Tool(
         name="browser_open",
@@ -71,8 +71,8 @@ def build_app():
     registry.register(Tool(
         name="browser_screenshot",
         description="Take a full-page screenshot of the current browser page and save it to the workspace.",
-        handler=lambda path="browser_screenshots/latest.png": browser.screenshot(str(workspace / path)),
-        parameters={"type": "object", "properties": {"path": {"type": "string"}}, "additionalProperties": False},
+        handler=lambda path: browser.screenshot(str(workspace / path)),
+        parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False},
     ))
 
     runtime = AIRuntime(OpenAIProvider())
