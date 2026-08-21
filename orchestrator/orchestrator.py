@@ -20,7 +20,10 @@ class Orchestrator:
     def run(self, goal: str) -> ExecutionState:
         state = ExecutionState(goal=goal)
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": "You are TOP SECRET AI. Plan tasks, use tools carefully, verify results, and stop when the goal is complete."},
+            {
+                "role": "system",
+                "content": "You are TOP SECRET AI. Plan tasks, use tools carefully, verify results, and stop when the goal is complete. When a tool result gives you enough information to continue, continue the task yourself instead of asking the user what to do next. Preserve the user's original goal throughout the entire task.",
+            },
             {"role": "user", "content": goal},
         ]
         previous_response_id = None
@@ -40,7 +43,13 @@ class Orchestrator:
                 state.status = "completed"
                 return state
 
-            tool_outputs = []
+            # Keep the model's function-call messages in the conversation.
+            # This is essential for OpenRouter, which cannot use
+            # previous_response_id for multi-step Responses API turns.
+            output_items = response.get("output_items", [])
+            if output_items:
+                messages.extend(output_items)
+
             for call in calls:
                 name = call["name"]
                 arguments = call.get("arguments", {})
@@ -49,14 +58,21 @@ class Orchestrator:
                 except Exception as exc:
                     result = {"error": str(exc)}
 
-                state.history.append({"action": name, "arguments": arguments, "result": result})
-                tool_outputs.append({
+                state.history.append({
+                    "action": name,
+                    "arguments": arguments,
+                    "result": result,
+                })
+                messages.append({
                     "type": "function_call_output",
                     "call_id": call["call_id"],
                     "output": str(result),
                 })
 
-            messages = tool_outputs
+            # The next model turn receives the complete accumulated context,
+            # not only the latest tool result.
+            if self.runtime.provider.is_openrouter:
+                previous_response_id = None
 
         state.status = "max_steps"
         return state
