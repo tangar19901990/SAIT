@@ -8,6 +8,7 @@ class Tool:
     name: str
     description: str
     handler: Callable[..., Any]
+    parameters: dict[str, Any]
     requires_approval: bool = False
 
 
@@ -32,10 +33,7 @@ class ToolRegistry:
 
     def describe(self) -> list[dict[str, Any]]:
         return [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "requires_approval": tool.requires_approval,
-            }
-            for tool in self._tools.values()
+            {"name": t.name, "description": t.description,
+             "parameters": t.parameters, "requires_approval": t.requires_approval}
+            for t in self._tools.values()
         ]
